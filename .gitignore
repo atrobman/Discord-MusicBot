@@ -127,3 +127,9 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# CUSTOM
+bottoken.py
+log.txt
+data.db
+nohup.out
