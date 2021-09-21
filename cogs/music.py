@@ -9,6 +9,7 @@ import random
 import functools
 import math
 from cogs import utils
+from datetime import date, datetime
 
 def setup(bot):
     bot.add_cog(Music(bot))
@@ -64,6 +65,9 @@ class YTDLSource(discord.PCMVolumeTransformer):
         self.likes = data.get('like_count')
         self.dislikes = data.get('dislike_count')
         self.stream_url = data.get('url')
+
+        self.time_played = 0.0
+        self.last_time_updated = None
 
     def __str__(self):
         return f'**{self.title}** by **{self.uploader}**'
@@ -122,7 +126,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
             duration.append(f'{hours} hours')
         if minutes > 0:
             duration.append(f'{minutes} minutes')
-        if seconds > 0:
+        if seconds >= 0:
             duration.append(f'{seconds} seconds')
 
         return ', '.join(duration)
@@ -138,7 +142,7 @@ class Song:
         embed = (discord.Embed(title='Now playing',
                                description=f'```css\n{self.source.title}\n```',
                                color=discord.Color.blurple())
-                 .add_field(name='Duration', value=self.source.duration)
+                 .add_field(name='Duration', value=f"{YTDLSource.parse_duration(round(self.source.time_played))} / {self.source.duration}", inline=False)
                  .add_field(name='Requested by', value=self.requester.mention)
                  .add_field(name='Uploader', value=f'[{self.source.uploader}]({self.source.uploader_url})')
                  .add_field(name='URL', value=f'[Click]({self.source.url})')
@@ -196,6 +200,7 @@ class MusicManager:
                 return
 
             self.voice_client.play(self.current_song.source, after=self.play_next_song)
+            self.current_song.source.last_time_updated = datetime.utcnow()
             await self.ctx.send(embed=self.current_song.create_embed())
             
             await self.next.wait()
@@ -211,6 +216,9 @@ class MusicManager:
         if error:
             raise VoiceError(str(error))
         
+        td = datetime.utcnow() - self.current_song.source.last_time_updated
+        self.current_song.source.time_played += td.total_seconds()
+        utils.log(f"Last song ended. Had duration {self.current_song.source.duration}, progress recorded as {YTDLSource.parse_duration((self.current_song.source.time_played))}")
         self.next.set()
 
     def skip(self):
@@ -280,6 +288,10 @@ class Music(commands.Cog):
     async def now(self, ctx):
 
         if ctx.voice_state.current_song:
+            if ctx.voice_state.voice_client.is_playing():
+                td = datetime.utcnow() - ctx.voice_state.current_song.source.last_time_updated
+                ctx.voice_state.current_song.source.last_time_updated = datetime.utcnow()
+                ctx.voice_state.current_song.source.time_played += td.total_seconds()
             await ctx.send(embed=ctx.voice_state.current_song.create_embed())
         else:
             await ctx.send(f"Nothing is playing right now")
@@ -289,6 +301,9 @@ class Music(commands.Cog):
 
         if ctx.voice_state.is_playing:
             if ctx.voice_state.voice_client.is_playing():
+                td = datetime.utcnow() - ctx.voice_state.current_song.source.last_time_updated
+                ctx.voice_state.current_song.source.last_time_updated = datetime.utcnow()
+                ctx.voice_state.current_song.source.time_played += td.total_seconds()
                 ctx.voice_state.voice_client.pause()
                 await ctx.send("Player paused")
             else:
@@ -302,6 +317,7 @@ class Music(commands.Cog):
         if ctx.voice_state.is_playing:
             if ctx.voice_state.voice_client.is_paused():
                 ctx.voice_state.voice_client.resume()
+                ctx.voice_state.current_song.source.last_time_updated = datetime.utcnow()
                 await ctx.send("Player resumed")
             else:
                 await ctx.send("Player is not paused")
@@ -323,8 +339,8 @@ class Music(commands.Cog):
             await ctx.send("Not playing anything right now")
             return
 
+        await ctx.send(f"Skipped **{ctx.voice_state.current_song.source.title}**...")
         ctx.voice_state.skip()
-        await ctx.send(f"Skipped song")
 
     @commands.command(pass_context=True, name="queue", aliases=["q", "list", "songs", "playlist"])
     async def queue(self, ctx, page: int = 1):
@@ -360,7 +376,12 @@ class Music(commands.Cog):
         if len(ctx.voice_state.queue) == 0:
             return await ctx.send("Queue is empty")
 
-        ctx.voice_state.queue.remove(index - 1)
+        if index > 0 and index <= len(ctx.voice_state.queue):
+            song_to_del = ctx.voice_state.queue[index - 1]
+            await ctx.send(f"Removed **{song_to_del.source.title}**")
+            ctx.voice_state.queue.remove(index - 1)
+        else:
+            await ctx.send("Index out of range")
 
     @commands.command(pass_context=True, name="play", aliases=["p", "pl"])
     async def play(self, ctx, *, search: str):
