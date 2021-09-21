@@ -57,7 +57,7 @@ async def on_command_error(ctx, error):
 
 @bot.command(pass_context=True, hidden=True)
 @utils.is_Owner()
-async def quit(ctx):
+async def adminquit(ctx):
     """Shuts down the bot"""
     await ctx.channel.send('Shutting down')
 
@@ -81,7 +81,7 @@ async def load(ctx, extension_name : str):
         return
     await ctx.channel.send("{} loaded.".format(extension_name))
 
-@bot.command(pass_context=True, hidden=True    )
+@bot.command(pass_context=True, hidden=True)
 @utils.is_Owner()
 async def unload(ctx, extension_name : str):
     """Unloads an extension"""
