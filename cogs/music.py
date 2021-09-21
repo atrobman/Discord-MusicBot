@@ -383,6 +383,15 @@ class Music(commands.Cog):
         else:
             await ctx.send("Index out of range")
 
+    @commands.command(pass_context=True, name="clear")
+    async def clear(self, ctx):
+
+        if len(ctx.voice_state.queue) == 0:
+            return await ctx.send("Queue is empty")
+
+        ctx.voice_state.queue.clear()
+        await ctx.send("Queue cleared")
+        
     @commands.command(pass_context=True, name="play", aliases=["p", "pl"])
     async def play(self, ctx, *, search: str):
         if not ctx.author.voice or not ctx.author.voice.channel:
