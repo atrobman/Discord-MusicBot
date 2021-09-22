@@ -58,7 +58,8 @@ class YTDLSource(discord.PCMVolumeTransformer):
         self.title = data.get('title')
         self.thumbnail = data.get('thumbnail')
         self.description = data.get('description')
-        self.duration = self.parse_duration(int(data.get('duration')))
+        self.duration_raw = int(data.get('duration'))
+        self.duration = self.parse_duration(self.duration_raw)
         self.tags = data.get('tags')
         self.url = data.get('webpage_url')
         self.views = data.get('view_count')
@@ -112,6 +113,65 @@ class YTDLSource(discord.PCMVolumeTransformer):
                     raise YTDLError(f'Couldn\'t retrieve any matches for `{webpage_url}`')
 
         return cls(ctx, discord.FFmpegPCMAudio(info['url'], **cls.FFMPEG_OPTIONS), data=info)
+
+    @classmethod
+    async def search_source(cls, ctx: commands.Context, search: str, *, loop: asyncio.BaseEventLoop = None, bot):
+        channel = ctx.channel
+        loop = loop or asyncio.get_event_loop()
+
+        cls.search_query = '%s%s:%s' % ('ytsearch', 10, ''.join(search))
+
+        partial = functools.partial(cls.ytdl.extract_info, cls.search_query, download=False, process=False)
+        info = await loop.run_in_executor(None, partial)
+
+        cls.search = {}
+        cls.search["title"] = f'Search results for:\n**{search}**'
+        cls.search["type"] = 'rich'
+        cls.search["color"] = 7506394
+        cls.search["author"] = {'name': f'{ctx.author.name}', 'url': f'{ctx.author.avatar_url}', 'icon_url': f'{ctx.author.avatar_url}'}
+        
+        lst = []
+        url_lst = []
+        for i, e in enumerate(info['entries']):
+            VId = e.get('id')
+            VUrl = 'https://www.youtube.com/watch?v=%s' % (VId)
+            lst.append(f'`{i + 1}.` [{e.get("title")}]({VUrl})\n')
+            url_lst.append(VUrl)
+
+        lst.append('\n**Type a number to make a choice, Type `cancel` to exit**')
+        cls.search["description"] = "\n".join(lst)
+
+        em = discord.Embed.from_dict(cls.search)
+        msg = await ctx.send(embed=em)
+
+        def check(msg):
+            return msg.content.isdigit() == True and msg.channel == channel or msg.content == 'cancel' or msg.content == 'Cancel'
+        
+        try:
+            m = await bot.wait_for('message', check=check, timeout=45.0)
+        except asyncio.TimeoutError:
+            rtrn = 'timeout'
+
+        else:
+            if m.content.isdigit() == True:
+                sel = int(m.content)
+                utils.log(sel)
+                if 0 < sel <= 10:
+                    VUrl = url_lst[sel - 1]
+                    partial = functools.partial(cls.ytdl.extract_info, VUrl, download=False)
+                    data = await loop.run_in_executor(None, partial)
+                    rtrn = cls(ctx, discord.FFmpegPCMAudio(data['url'], **cls.FFMPEG_OPTIONS), data=data)
+                else:
+                    rtrn = 'sel_invalid'
+            elif m.content == 'cancel':
+                rtrn = 'cancel'
+            else:
+                rtrn = 'sel_invalid'
+        
+        await ctx.message.delete()
+        await m.delete()
+        await msg.delete()
+        return rtrn
 
     @staticmethod
     def parse_duration(duration: int):
@@ -192,7 +252,7 @@ class MusicManager:
             self.current_song = None
 
             try:
-                async with timeout(180):
+                async with timeout(180): #wait 3 minutes for a song to show up in queue
                     self.current_song = await self.queue.get()
             except asyncio.TimeoutError:
                 self.bot.loop.create_task(self.stop())
@@ -218,7 +278,6 @@ class MusicManager:
         
         td = datetime.utcnow() - self.current_song.source.last_time_updated
         self.current_song.source.time_played += td.total_seconds()
-        utils.log(f"Last song ended. Had duration {self.current_song.source.duration}, progress recorded as {YTDLSource.parse_duration((self.current_song.source.time_played))}")
         self.next.set()
 
     def skip(self):
@@ -332,7 +391,7 @@ class Music(commands.Cog):
         if ctx.voice_state.is_playing:
             ctx.voice_state.voice_client.stop()
 
-    @commands.command(pass_context=True, name="skip", aliases=["s", "fs"])
+    @commands.command(pass_context=True, name="skip")
     async def skip(self, ctx):
 
         if not ctx.voice_state.is_playing:
@@ -409,9 +468,45 @@ class Music(commands.Cog):
         async with ctx.typing():
             try:
                 source = await YTDLSource.create_source(ctx, search, loop=self.bot.loop)
+                if source.duration_raw >= 15600: #4 hours and 20 minutes
+                    await ctx.send(f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes")
+                    return
             except YTDLError as e:
                 await ctx.send(f'An error occurred while processing this request: {e}')
             else:
                 song = Song(source)
+                
                 await ctx.voice_state.queue.put(song)
                 await ctx.send(f"**{source.title}** added to queue")
+
+    @commands.command(pass_context=True, name="search", aliases=["s",])
+    async def search(self, ctx, *, search: str):
+        if not ctx.author.voice or not ctx.author.voice.channel:
+            await ctx.send('You are not connected to any voice channel.')
+            return
+
+        if ctx.voice_client:
+            if ctx.voice_client.channel != ctx.author.voice.channel:
+                await ctx.send('Bot is already in a voice channel.')
+                return
+
+        if not ctx.voice_state.voice_client:
+            await ctx.invoke(self.join)
+
+        async with ctx.typing():
+            try:
+                source = await YTDLSource.search_source(ctx, search, loop=self.bot.loop, bot=self.bot)
+            except YTDLError as e:
+                await ctx.send(f'An error occurred while processing this request: {e}')
+            else:
+                if source == 'sel_invalid':
+                    await ctx.send('Invalid Selection')
+                elif source == 'cancel':
+                    await ctx.send(':white_check_mark:')
+                elif source == 'timeout':
+                    await ctx.send(':alarm_clock: **Time\'s up bud**')
+                else:
+                    
+                    song = Song(source)
+                    await ctx.voice_state.queue.put(song)
+                    await ctx.send(f"**{source.title}** added to queue")
