@@ -31,6 +31,16 @@ def emb_color(query):
     else:
         return discord.Color.from_rgb(255, 255, 255).value
 
+class DoNothingLogger(object):
+    def debug(self, msg):
+        pass
+
+    def warning(self, msg):
+        pass
+
+    def error(self, msg):
+        pass
+    
 class YTDLSource(discord.PCMVolumeTransformer):
     YTDL_OPTIONS = {
         'format': 'bestaudio/best',
@@ -47,10 +57,11 @@ class YTDLSource(discord.PCMVolumeTransformer):
         'default_search': 'auto',
         'source_address': '0.0.0.0',
         'nocachedir': True,
+        'logger': DoNothingLogger()
         }
 
     FFMPEG_OPTIONS = {
-        'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+        'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -nostats -loglevel 0',
         'options': '-vn',
     }
 
@@ -90,7 +101,10 @@ class YTDLSource(discord.PCMVolumeTransformer):
         loop = loop or asyncio.get_event_loop()
 
         partial = functools.partial(cls.ytdl.extract_info, search, download=False, process=False)
-        data = await loop.run_in_executor(None, partial)
+        try:
+            data = await loop.run_in_executor(None, partial)
+        except youtube_dl.utils.DownloadError as e:
+            raise YTDLError(str(e))
 
         if data is None:
             raise YTDLError(f'Couldn\'t find anything that matches `{search}`')
@@ -440,8 +454,14 @@ class Music(commands.Cog):
         end = start + items_per_page
 
         queue = ''
+
+        if ctx.voice_state.current_song:
+            queue += f'__Now Playing__'
+            queue += f'[**{ctx.voice_state.current_song.title}**]({ctx.voice_state.current_song.url})\n\n'
+
+        queue += f'__Up Next:__\n'
         for i, song in enumerate(ctx.voice_state.queue[start:end], start=start):
-            queue += f'`{i + 1}.` [**{song.source.title}**]({song.source.url})\n'
+            queue += f'`{i + 1}.` [{song.source.title}]({song.source.url}) | `{song.soure.duration} Requested by: {song.source.requester.username}#{song.source.requester.discriminator}`\n'
 
         embed = (discord.Embed(description=f'**{len(ctx.voice_state.queue)} tracks:**\n\n{queue}')
                     .set_footer(text=f'Viewing page {page}/{pages}'))
@@ -507,21 +527,46 @@ class Music(commands.Cog):
         if not ctx.voice_state.voice_client:
             await ctx.invoke(self.join)
 
-        async with ctx.typing():
-            try:
-                source = await YTDLSource.create_source(ctx, search.strip("<>"), loop=self.bot.loop)
-            except YTDLError as e:
-                await ctx.send(f'An error occurred while processing this request: {e}')
-            else:
-                if source.duration_raw >= 15600: #4 hours and 20 minutes
-                    await ctx.send(f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes")
-                    await ctx.message.delete()
-                    return
-                song = Song(source)
+        if '?list=' in search:
+            m = await ctx.send(":clock2: One moment! Processing playlists can take a bit... :clock2:")
+            async with ctx.typing():
+                playlist, playlistTitle = self._playlist(search)
+                songlist = []
+                for _title, _link in playlist.items():
+                    try:
+                        source = await YTDLSource.create_source(ctx, _link, loop=self.bot.loop)
+                    except YTDLError as e:
+                        await ctx.send(f'An error occurred while processing this request: **{e}**')
+                    else:
+                        if source.duration_raw >= 15600: #4 hours and 20 minutes
+                            await ctx.send(f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes")
+                            return
+                        song = Song(source)
                 
+                        songlist.append(song)
+
+            await m.delete()
+            if ctx.voice_state.current_song:
+                await ctx.send(f"Queued **{playlistTitle}**")
+            for song in songlist:
                 await ctx.voice_state.queue.put(song)
-                if ctx.voice_state.current_song:
-                    await ctx.send(embed=song.create_embed(title='Queued'))
+
+        else:
+            async with ctx.typing():
+                try:
+                    source = await YTDLSource.create_source(ctx, search.strip("<>"), loop=self.bot.loop)
+                except YTDLError as e:
+                    await ctx.send(f'An error occurred while processing this request: **{e}**')
+                else:
+                    if source.duration_raw >= 15600: #4 hours and 20 minutes
+                        await ctx.send(f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes")
+                        await ctx.message.delete()
+                        return
+                    song = Song(source)
+                    
+                    if ctx.voice_state.current_song:
+                        await ctx.send(embed=song.create_embed(title='Queued'))
+                    await ctx.voice_state.queue.put(song)
 
         await ctx.message.delete()
 
@@ -541,11 +586,14 @@ class Music(commands.Cog):
         if not ctx.voice_state.voice_client:
             await ctx.invoke(self.join)
 
+        if "?list=" in search:
+            await ctx.send("Sorry! You can't skip the queue with playlists")
+
         async with ctx.typing():
             try:
                 source = await YTDLSource.create_source(ctx, search.strip("<>"), loop=self.bot.loop)
             except YTDLError as e:
-                await ctx.send(f'An error occurred while processing this request: {e}')
+                await ctx.send(f'An error occurred while processing this request: **{e}**')
             else:
                 if source.duration_raw >= 15600: #4 hours and 20 minutes
                     await ctx.send(f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes")
@@ -584,9 +632,11 @@ class Music(commands.Cog):
                 if source == 'sel_invalid':
                     await ctx.send('Invalid Selection')
                 elif source == 'cancel':
-                    await ctx.send(':white_check_mark:')
+                    # await ctx.send(':white_check_mark:')
+                    pass
                 elif source == 'timeout':
-                    await ctx.send(':alarm_clock: **Time\'s up bud**')
+                    # await ctx.send(':alarm_clock: **Time\'s up bud**')
+                    pass
                 else:
                     if source.duration_raw >= 15600: #4 hours and 20 minutes
                         await ctx.send(f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes")
@@ -595,3 +645,20 @@ class Music(commands.Cog):
                     await ctx.voice_state.queue.put(song)
                     if ctx.voice_state.current_song:
                         await ctx.send(embed=song.create_embed(title='Queued'))
+
+    def _playlist(self, search: str):
+
+        with YTDLSource.ytdl as ydl:
+            playlist_dict = ydl.extract_info(search.strip("<>"), download=False)
+
+            playlistTitle = playlist_dict['title']
+
+            playlist = dict()
+            for video in playlist_dict['entries']:
+
+                if not video:
+                    raise YTDLError(f'Failed to download all songs in playlist ({search})')
+                
+                playlist[video.get('title')] = 'https://www.youtube.com/watch?v=' + video.get('id')
+        
+        return playlist, playlistTitle
