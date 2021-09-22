@@ -3,7 +3,7 @@ from discord.ext import commands
 def is_Owner():
     """Check to see if user is registered as the Bot owner"""
     def predicate(ctx):
-        return ctx.message.author.id in [192739355264024586, 335618997217132544]
+        return ctx.message.author.id in [192739355264024586]
     return commands.check(predicate)
 
 class AdvMemberConverter(commands.MemberConverter):

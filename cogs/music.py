@@ -302,7 +302,7 @@ class MusicManager:
             self.voice_client.play(self.current_song.source, after=self.play_next_song)
             self.current_song.source.last_time_updated = datetime.utcnow()
             await self.ctx.send(embed=self.current_song.create_embed())
-            
+
             await self.next.wait()
 
     async def stop(self):
@@ -372,6 +372,7 @@ class Music(commands.Cog):
             return
         
         ctx.voice_state.voice_client = await dest.connect()
+        await ctx.send(f"Joined **{dest.name}**")
 
     @commands.command(pass_context=True, name="leave", aliases=["quit", "exit"])
     async def leave(self, ctx):
@@ -457,11 +458,11 @@ class Music(commands.Cog):
 
         if ctx.voice_state.current_song:
             queue += f'__Now Playing__'
-            queue += f'[**{ctx.voice_state.current_song.title}**]({ctx.voice_state.current_song.url})\n\n'
+            queue += f'[**{ctx.voice_state.current_song.source.title}**]({ctx.voice_state.current_song.source.url})\n\n'
 
         queue += f'__Up Next:__\n'
         for i, song in enumerate(ctx.voice_state.queue[start:end], start=start):
-            queue += f'`{i + 1}.` [{song.source.title}]({song.source.url}) | `{song.soure.duration} Requested by: {song.source.requester.username}#{song.source.requester.discriminator}`\n'
+            queue += f'`{i + 1}.` [{song.source.title}]({song.source.url}) | `{song.source.duration} Requested by: {song.source.requester.name}#{song.source.requester.discriminator}`\n'
 
         embed = (discord.Embed(description=f'**{len(ctx.voice_state.queue)} tracks:**\n\n{queue}')
                     .set_footer(text=f'Viewing page {page}/{pages}'))
@@ -662,3 +663,4 @@ class Music(commands.Cog):
                 playlist[video.get('title')] = 'https://www.youtube.com/watch?v=' + video.get('id')
         
         return playlist, playlistTitle
+        

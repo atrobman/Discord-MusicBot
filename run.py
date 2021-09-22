@@ -52,6 +52,9 @@ async def on_command_error(ctx, error):
         return
     elif type(error) is commands.errors.MissingPermissions: #If user is missing permissions to perform an action, send a message (only if verbose)
         return
+    elif type(error) is commands.NoPrivateMessage:
+        await ctx.send(str(error))
+        return
     else:
         raise error
 
