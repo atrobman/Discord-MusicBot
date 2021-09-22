@@ -28,6 +28,8 @@ def emb_color(query):
     elif query in ['Queued']:
         return discord.Color.from_rgb(188, 191, 61).value
     
+    elif query in ['Removed']:
+        return discord.Color.dark_red().value
     else:
         return discord.Color.from_rgb(255, 255, 255).value
 
@@ -358,6 +360,10 @@ class Music(commands.Cog):
 
     @commands.command(pass_context=True, name="join", aliases=["summon, start"])
     async def join(self, ctx):
+        '''
+        Join the user's Voice Channel
+        '''
+
         if not ctx.author.voice or not ctx.author.voice.channel:
             await ctx.send('You are not connected to any voice channel.')
             return
@@ -377,6 +383,9 @@ class Music(commands.Cog):
 
     @commands.command(pass_context=True, name="leave", aliases=["quit", "exit"])
     async def leave(self, ctx):
+        '''
+        Clear the queue and leave the Voice Channel
+        '''
 
         if not ctx.voice_state.voice_client:
             await ctx.send('Not connected to a voice channel')
@@ -387,6 +396,9 @@ class Music(commands.Cog):
 
     @commands.command(pass_context=True, name="now", aliases=["np", "current", "n"])
     async def now(self, ctx):
+        '''
+        Display the currently playing song, if there is one
+        '''
 
         if ctx.voice_state.current_song:
             if ctx.voice_state.voice_client.is_playing():
@@ -399,6 +411,9 @@ class Music(commands.Cog):
 
     @commands.command(pass_context=True, name="pause")
     async def pause(self, ctx):
+        '''
+        Pause the player
+        '''
 
         if ctx.voice_state.is_playing:
             if ctx.voice_state.voice_client.is_playing():
@@ -414,6 +429,9 @@ class Music(commands.Cog):
     
     @commands.command(pass_context=True, name="resume", aliases=["continue", "start"])
     async def resume(self, ctx):
+        '''
+        Unpause the player
+        '''
 
         if ctx.voice_state.is_playing:
             if ctx.voice_state.voice_client.is_paused():
@@ -424,17 +442,12 @@ class Music(commands.Cog):
                 await ctx.send("Player is not paused")
         else:
             await ctx.send("Nothing is playing right now")
-            
-    @commands.command(pass_context=True, name="stop")
-    async def stop(self, ctx):
-
-        ctx.voice_state.queue.clear()
-
-        if ctx.voice_state.is_playing:
-            ctx.voice_state.voice_client.stop()
 
     @commands.command(pass_context=True, name="skip")
     async def skip(self, ctx):
+        '''
+        Skip the currently playing song
+        '''
 
         if not ctx.voice_state.is_playing:
             await ctx.send("Not playing anything right now")
@@ -445,6 +458,9 @@ class Music(commands.Cog):
 
     @commands.command(pass_context=True, name="queue", aliases=["q", "list", "songs", "playlist"])
     async def queue(self, ctx, page: int = 1):
+        '''
+        Display the queue. If there are multiple pages, you can specify page number.
+        '''
 
         if len(ctx.voice_state.queue) == 0:
             return await ctx.send("Queue is empty")
@@ -458,19 +474,22 @@ class Music(commands.Cog):
         queue = ''
 
         if ctx.voice_state.current_song:
-            queue += f'__Now Playing__'
-            queue += f'[**{ctx.voice_state.current_song.source.title}**]({ctx.voice_state.current_song.source.url})\n\n'
+            queue += f'__Now Playing__\n'
+            queue += f'[**{ctx.voice_state.current_song.source.title}**]({ctx.voice_state.current_song.source.url}) | `{ctx.voice_state.current_song.source.duration} Requested by: {ctx.voice_state.current_song.source.requester.name}#{ctx.voice_state.current_song.source.requester.discriminator}`\n\n'
 
         queue += f'__Up Next:__\n'
         for i, song in enumerate(ctx.voice_state.queue[start:end], start=start):
             queue += f'`{i + 1}.` [{song.source.title}]({song.source.url}) | `{song.source.duration} Requested by: {song.source.requester.name}#{song.source.requester.discriminator}`\n'
 
-        embed = (discord.Embed(description=f'**{len(ctx.voice_state.queue)} tracks:**\n\n{queue}')
+        embed = (discord.Embed(description=queue)
                     .set_footer(text=f'Viewing page {page}/{pages}'))
         await ctx.send(embed=embed)
 
     @commands.command(pass_context=True, name="shuffle")
     async def shuffle(self, ctx):
+        '''
+        Shuffle the queue randomly
+        '''
 
         if len(ctx.voice_state.queue) == 0:
             return await ctx.send("Queue is empty")
@@ -479,19 +498,26 @@ class Music(commands.Cog):
 
     @commands.command(pass_context=True, name="remove", aliases=["r", "d", "delete", "del", "rm", "rem"])
     async def remove(self, ctx, index: int):
+        '''
+        Remove the song at given index
+        '''
 
         if len(ctx.voice_state.queue) == 0:
             return await ctx.send("Queue is empty")
 
         if index > 0 and index <= len(ctx.voice_state.queue):
             song_to_del = ctx.voice_state.queue[index - 1]
-            await ctx.send(f"Removed **{song_to_del.source.title}**")
+            # await ctx.send(f"Removed **{song_to_del.source.title}**")
+            await ctx.send(song_to_del.create_embed(title="Removed", show_progress=True))
             ctx.voice_state.queue.remove(index - 1)
         else:
             await ctx.send("Index out of range")
 
     @commands.command(pass_context=True, name="clear")
     async def clear(self, ctx):
+        '''
+        Empty the queue
+        '''
 
         if len(ctx.voice_state.queue) == 0:
             return await ctx.send("Queue is empty")
@@ -501,6 +527,11 @@ class Music(commands.Cog):
     
     @commands.command(pass_context=True, name="move", aliases=["m",])
     async def move(self, ctx, from_index: int, to_index: int):
+        '''
+        Move a song from **a** to **b**
+        
+        Note: This does not swap, it removes the song and inserts it at the new position
+        '''
 
         if len(ctx.voice_state.queue) < 2:
             return await ctx.send("Queue is too short for moving")
@@ -515,6 +546,12 @@ class Music(commands.Cog):
 
     @commands.command(pass_context=True, name="play", aliases=["p", "pl"])
     async def play(self, ctx, *, search: str):
+        '''
+        Add a song to the queue. Works with any youtube-dl compatible site, and also works with Playlists.
+
+        If a link is not given, will search and play the first result found on Youtube.
+        '''
+
         if not ctx.author.voice or not ctx.author.voice.channel:
             await ctx.send('You are not connected to any voice channel.')
             await ctx.message.delete()
@@ -574,6 +611,12 @@ class Music(commands.Cog):
 
     @commands.command(pass_context=True, name="playnext", aliases=["pn",])
     async def playnext(self, ctx, *, search: str):
+        '''
+        Add a song to the top of the queue. Works with any youtube-dl compatible site, and also works with Playlists.
+
+        If a link is not given, will search and play the first result found on Youtube.
+        '''
+
         if not ctx.author.voice or not ctx.author.voice.channel:
             await ctx.send('You are not connected to any voice channel.')
             await ctx.message.delete()
@@ -613,6 +656,10 @@ class Music(commands.Cog):
 
     @commands.command(pass_context=True, name="search", aliases=["s",])
     async def search(self, ctx, *, search: str):
+        '''
+        Search on Youtube for a song to add to the queue
+        '''
+
         if not ctx.author.voice or not ctx.author.voice.channel:
             await ctx.send('You are not connected to any voice channel.')
             return
@@ -632,13 +679,11 @@ class Music(commands.Cog):
                 await ctx.send(f'An error occurred while processing this request: {e}')
             else:
                 if source == 'sel_invalid':
-                    await ctx.send('Invalid Selection')
+                    await ctx.send('Invalid Selection', delete_after=15.0)
                 elif source == 'cancel':
-                    # await ctx.send(':white_check_mark:')
-                    pass
+                    await ctx.send('Selection canceled', delete_after=15.0)
                 elif source == 'timeout':
-                    # await ctx.send(':alarm_clock: **Time\'s up bud**')
-                    pass
+                    await ctx.send('Selection timed out', delete_after=15.0)
                 else:
                     if source.duration_raw >= 15600: #4 hours and 20 minutes
                         await ctx.send(f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes")
