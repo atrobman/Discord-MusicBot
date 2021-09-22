@@ -295,6 +295,7 @@ class MusicManager:
                 async with timeout(600): #wait 10 minutes for a song to show up in queue
                     self.current_song = await self.queue.get()
             except asyncio.TimeoutError:
+                await self.ctx.send(f"No activity for `10 minutes`. Leaving **{self.voice_client.channel.name}**")
                 self.bot.loop.create_task(self.stop())
                 self.exists = False
                 return
