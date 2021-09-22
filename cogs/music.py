@@ -167,7 +167,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
         else:
             if m.content.isdigit() == True:
                 sel = int(m.content)
-                if 0 < sel <= 10:
+                if 0 < sel <= min(10, len(url_lst)):
                     VUrl = url_lst[sel - 1]
                     partial = functools.partial(cls.ytdl.extract_info, VUrl, download=False)
                     data = await loop.run_in_executor(None, partial)
@@ -333,7 +333,7 @@ class Music(commands.Cog):
 
     def cog_check(self, ctx):
         if not ctx.guild:
-            raise Exception("Test: please change to be more descriptive")
+            raise commands.NoPrivateMessage("This command can't be used in DM channels")
 
         return True
 
@@ -476,7 +476,21 @@ class Music(commands.Cog):
 
         ctx.voice_state.queue.clear()
         await ctx.send("Queue cleared")
-        
+    
+    @commands.command(pass_context=True, name="move", aliases=["m",])
+    async def move(self, ctx, from_index: int, to_index: int):
+
+        if len(ctx.voice_state.queue) < 2:
+            return await ctx.send("Queue is too short for moving")
+
+        if 0 < from_index <= len(ctx.voice_state.queue) and 0 < to_index <= len(ctx.voice_state.queue):
+            temp = ctx.voice_state.queue._queue[from_index - 1]
+            del ctx.voice_state.queue._queue[from_index - 1]
+            ctx.voice_state.queue._queue.insert(to_index - 1, temp)
+            await ctx.send(f"Moved **{temp.source.title}** to position `{to_index}`")
+        else:
+            await ctx.send(f"Invalid indices")
+
     @commands.command(pass_context=True, name="play", aliases=["p", "pl"])
     async def play(self, ctx, *, search: str):
         if not ctx.author.voice or not ctx.author.voice.channel:
@@ -495,7 +509,7 @@ class Music(commands.Cog):
 
         async with ctx.typing():
             try:
-                source = await YTDLSource.create_source(ctx, search, loop=self.bot.loop)
+                source = await YTDLSource.create_source(ctx, search.strip("<>"), loop=self.bot.loop)
             except YTDLError as e:
                 await ctx.send(f'An error occurred while processing this request: {e}')
             else:
@@ -529,7 +543,7 @@ class Music(commands.Cog):
 
         async with ctx.typing():
             try:
-                source = await YTDLSource.create_source(ctx, search, loop=self.bot.loop)
+                source = await YTDLSource.create_source(ctx, search.strip("<>"), loop=self.bot.loop)
             except YTDLError as e:
                 await ctx.send(f'An error occurred while processing this request: {e}')
             else:
@@ -563,7 +577,7 @@ class Music(commands.Cog):
 
         async with ctx.typing():
             try:
-                source = await YTDLSource.search_source(ctx, search, loop=self.bot.loop, bot=self.bot)
+                source = await YTDLSource.search_source(ctx, search.strip("<>"), loop=self.bot.loop, bot=self.bot)
             except YTDLError as e:
                 await ctx.send(f'An error occurred while processing this request: {e}')
             else:
