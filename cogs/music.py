@@ -292,7 +292,7 @@ class MusicManager:
             self.current_song = None
 
             try:
-                async with timeout(180): #wait 3 minutes for a song to show up in queue
+                async with timeout(600): #wait 10 minutes for a song to show up in queue
                     self.current_song = await self.queue.get()
             except asyncio.TimeoutError:
                 self.bot.loop.create_task(self.stop())
@@ -663,4 +663,3 @@ class Music(commands.Cog):
                 playlist[video.get('title')] = 'https://www.youtube.com/watch?v=' + video.get('id')
         
         return playlist, playlistTitle
-        
