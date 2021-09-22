@@ -539,9 +539,11 @@ class Music(commands.Cog):
                     return
                 song = Song(source)
                 
-                ctx.voice_state.queue._queue.appendleft(song)
                 if ctx.voice_state.current_song:
+                    ctx.voice_state.queue._queue.appendleft(song)
                     await ctx.send(embed=song.create_embed(title='Queued'))
+                else:
+                    await ctx.voice_state.queue.put(song)
 
         await ctx.message.delete()
 
