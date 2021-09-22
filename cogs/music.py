@@ -38,7 +38,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
         'audioformat': 'mp3',
         'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
         'restrictfilenames': True,
-        'noplaylist': True,
+        'noplaylist': False,
         'nocheckcertificate': True,
         'ignoreerrors': False,
         'logtostderr': False,
@@ -256,6 +256,7 @@ class SongQueue(asyncio.Queue):
 
     def remove(self, index: int):
         del self._queue[index]
+        
 
 class MusicManager:
     def __init__(self, bot, ctx):
@@ -505,6 +506,40 @@ class Music(commands.Cog):
                 song = Song(source)
                 
                 await ctx.voice_state.queue.put(song)
+                if ctx.voice_state.current_song:
+                    await ctx.send(embed=song.create_embed(title='Queued'))
+
+        await ctx.message.delete()
+
+    @commands.command(pass_context=True, name="playnext", aliases=["pn",])
+    async def playnext(self, ctx, *, search: str):
+        if not ctx.author.voice or not ctx.author.voice.channel:
+            await ctx.send('You are not connected to any voice channel.')
+            await ctx.message.delete()
+            return
+
+        if ctx.voice_client:
+            if ctx.voice_client.channel != ctx.author.voice.channel:
+                await ctx.send('Bot is already in a voice channel.')
+                await ctx.message.delete()
+                return
+
+        if not ctx.voice_state.voice_client:
+            await ctx.invoke(self.join)
+
+        async with ctx.typing():
+            try:
+                source = await YTDLSource.create_source(ctx, search, loop=self.bot.loop)
+            except YTDLError as e:
+                await ctx.send(f'An error occurred while processing this request: {e}')
+            else:
+                if source.duration_raw >= 15600: #4 hours and 20 minutes
+                    await ctx.send(f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes")
+                    await ctx.message.delete()
+                    return
+                song = Song(source)
+                
+                ctx.voice_state.queue._queue.appendleft(song)
                 if ctx.voice_state.current_song:
                     await ctx.send(embed=song.create_embed(title='Queued'))
 
