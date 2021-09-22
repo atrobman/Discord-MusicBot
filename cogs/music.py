@@ -20,6 +20,17 @@ class VoiceError(Exception):
 class YTDLError(Exception):
     pass
 
+def emb_color(query):
+
+    if query in ['Now playing']:
+        return discord.Color.blurple().value
+
+    elif query in ['Queued']:
+        return discord.Color.from_rgb(188, 191, 61).value
+    
+    else:
+        return discord.Color.from_rgb(255, 255, 255).value
+
 class YTDLSource(discord.PCMVolumeTransformer):
     YTDL_OPTIONS = {
         'format': 'bestaudio/best',
@@ -35,6 +46,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
         'no_warnings': True,
         'default_search': 'auto',
         'source_address': '0.0.0.0',
+        'nocachedir': True,
         }
 
     FFMPEG_OPTIONS = {
@@ -127,7 +139,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
         cls.search = {}
         cls.search["title"] = f'Search results for:\n**{search}**'
         cls.search["type"] = 'rich'
-        cls.search["color"] = 7506394
+        cls.search["color"] = emb_color('search')
         cls.search["author"] = {'name': f'{ctx.author.name}', 'url': f'{ctx.author.avatar_url}', 'icon_url': f'{ctx.author.avatar_url}'}
         
         lst = []
@@ -155,7 +167,6 @@ class YTDLSource(discord.PCMVolumeTransformer):
         else:
             if m.content.isdigit() == True:
                 sel = int(m.content)
-                utils.log(sel)
                 if 0 < sel <= 10:
                     VUrl = url_lst[sel - 1]
                     partial = functools.partial(cls.ytdl.extract_info, VUrl, download=False)
@@ -198,15 +209,29 @@ class Song:
         self.source = source
         self.requester = source.requester
 
-    def create_embed(self):
-        embed = (discord.Embed(title='Now playing',
-                               description=f'```css\n{self.source.title}\n```',
-                               color=discord.Color.blurple())
-                 .add_field(name='Duration', value=f"{YTDLSource.parse_duration(round(self.source.time_played))} / {self.source.duration}", inline=False)
-                 .add_field(name='Requested by', value=self.requester.mention)
-                 .add_field(name='Uploader', value=f'[{self.source.uploader}]({self.source.uploader_url})')
-                 .add_field(name='URL', value=f'[Click]({self.source.url})')
-                 .set_thumbnail(url=self.source.thumbnail))
+    def create_embed(self, title='Now playing', show_progress=False):
+        if show_progress:
+            num_segments = 20
+
+            seg_time = self.source.duration_raw / num_segments
+            before_segments = math.floor(self.source.time_played / seg_time)
+            p_bar = "`" + "▬" * before_segments + "🔘" + "▬" * (num_segments - 1 - before_segments) + "`"
+
+            embed = (discord.Embed(title=title,
+                                description=f'[{self.source.title}]({self.source.url})\n\n{p_bar}\n',
+                                color=emb_color(title))
+                    .add_field(name='Duration', value=f"{YTDLSource.parse_duration(round(self.source.time_played))} / {self.source.duration}", inline=False)
+                    .add_field(name='Requested by', value=self.requester.mention)
+                    .add_field(name='Uploader', value=f'[{self.source.uploader}]({self.source.uploader_url})')
+                    .set_thumbnail(url=self.source.thumbnail))
+        else:
+            embed = (discord.Embed(title=title,
+                                description=f'[{self.source.title}]({self.source.url})',
+                                color=emb_color(title))
+                    .add_field(name='Duration', value=f"{self.source.duration}", inline=False)
+                    .add_field(name='Requested by', value=self.requester.mention)
+                    .add_field(name='Uploader', value=f'[{self.source.uploader}]({self.source.uploader_url})')
+                    .set_thumbnail(url=self.source.thumbnail))
 
         return embed
 
@@ -351,7 +376,7 @@ class Music(commands.Cog):
                 td = datetime.utcnow() - ctx.voice_state.current_song.source.last_time_updated
                 ctx.voice_state.current_song.source.last_time_updated = datetime.utcnow()
                 ctx.voice_state.current_song.source.time_played += td.total_seconds()
-            await ctx.send(embed=ctx.voice_state.current_song.create_embed())
+            await ctx.send(embed=ctx.voice_state.current_song.create_embed(show_progress=True))
         else:
             await ctx.send(f"Nothing is playing right now")
 
@@ -455,11 +480,13 @@ class Music(commands.Cog):
     async def play(self, ctx, *, search: str):
         if not ctx.author.voice or not ctx.author.voice.channel:
             await ctx.send('You are not connected to any voice channel.')
+            await ctx.message.delete()
             return
 
         if ctx.voice_client:
             if ctx.voice_client.channel != ctx.author.voice.channel:
                 await ctx.send('Bot is already in a voice channel.')
+                await ctx.message.delete()
                 return
 
         if not ctx.voice_state.voice_client:
@@ -468,16 +495,20 @@ class Music(commands.Cog):
         async with ctx.typing():
             try:
                 source = await YTDLSource.create_source(ctx, search, loop=self.bot.loop)
-                if source.duration_raw >= 15600: #4 hours and 20 minutes
-                    await ctx.send(f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes")
-                    return
             except YTDLError as e:
                 await ctx.send(f'An error occurred while processing this request: {e}')
             else:
+                if source.duration_raw >= 15600: #4 hours and 20 minutes
+                    await ctx.send(f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes")
+                    await ctx.message.delete()
+                    return
                 song = Song(source)
                 
                 await ctx.voice_state.queue.put(song)
-                await ctx.send(f"**{source.title}** added to queue")
+                if ctx.voice_state.current_song:
+                    await ctx.send(embed=song.create_embed(title='Queued'))
+
+        await ctx.message.delete()
 
     @commands.command(pass_context=True, name="search", aliases=["s",])
     async def search(self, ctx, *, search: str):
@@ -506,7 +537,10 @@ class Music(commands.Cog):
                 elif source == 'timeout':
                     await ctx.send(':alarm_clock: **Time\'s up bud**')
                 else:
-                    
+                    if source.duration_raw >= 15600: #4 hours and 20 minutes
+                        await ctx.send(f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes")
+                        return
                     song = Song(source)
                     await ctx.voice_state.queue.put(song)
-                    await ctx.send(f"**{source.title}** added to queue")
+                    if ctx.voice_state.current_song:
+                        await ctx.send(embed=song.create_embed(title='Queued'))
