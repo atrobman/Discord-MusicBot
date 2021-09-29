@@ -620,7 +620,7 @@ class Music(commands.Cog):
             song_to_del = ctx.voice_state.queue[index - 1]
 
             if song_to_del.requester == ctx.author or ctx.user_permissions.remove:
-                await ctx.send(embed=song_to_del.create_embed(title="Removed", show_progress=True))
+                await ctx.send(embed=song_to_del.create_embed(title="Removed"))
                 ctx.voice_state.queue.remove(index - 1)
             else:
                 await ctx.send("ERROR: Missing permission `remove`")
