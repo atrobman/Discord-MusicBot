@@ -28,6 +28,20 @@ class Core(commands.Cog):
             await self.bot.process_commands(message)
 
     @commands.command(pass_context=True)
+    @utils.is_Owner()
+    async def py(self, ctx):
+        """Execute arbitrary python code
+        NOTE: only enabled for approved users. Contact Ace if you would like to
+        be added to the approved user list
+        """
+
+        exec(
+            f'async def __ex(self, ctx): ' +
+            ''.join(f'\n {l}' for l in (ctx.message.content[4:]).split('\n'))
+        )
+
+        await locals()['__ex'](self, ctx)
+    @commands.command(pass_context=True)
     @commands.cooldown(3, 5, commands.BucketType.user)
     async def ping(self, ctx):
         """Calculates the ping time"""

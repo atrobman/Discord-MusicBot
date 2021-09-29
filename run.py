@@ -115,6 +115,8 @@ async def reload(ctx):
     
 if __name__ == "__main__":
 
+    bot.cursor.execute("""CREATE TABLE IF NOT EXISTS perms (RoleID int, Perms int)""")
+
     for extension in os.listdir("./cogs"):
         if extension.endswith('.py') and not extension.startswith('_'):
             try:

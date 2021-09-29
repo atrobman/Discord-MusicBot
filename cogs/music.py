@@ -42,7 +42,67 @@ class DoNothingLogger(object):
 
     def error(self, msg):
         pass
-    
+
+class PermissionsParser:
+
+    def __init__(self, force_skip: bool = False, remove: bool = False, move: bool = False, play_next: bool = False, play: bool = True, pause_resume: bool = False, playlists: bool = False, shuffle: bool = False, leave: bool = False):
+        
+        self.force_skip = force_skip
+        self.remove = remove
+        self.move = move
+        self.play_next = play_next
+        self.play = play
+        self.pause_resume = pause_resume
+        self.playlists = playlists
+        self.shuffle = shuffle
+        self.leave = leave
+
+    @classmethod
+    def parse(cls, perms):
+
+        force_skip =   bool(perms & (1 << 0))
+        remove =       bool(perms & (1 << 1))
+        move =         bool(perms & (1 << 2))
+        play_next =    bool(perms & (1 << 3))
+        play =         bool(perms & (1 << 4))
+        pause_resume = bool(perms & (1 << 5))
+        playlists =    bool(perms & (1 << 6))
+        shuffle =      bool(perms & (1 << 7))
+        leave =        bool(perms & (1 << 8))
+
+        return cls(force_skip, remove, move, play_next, play, pause_resume, playlists, shuffle, leave)
+
+    def to_int(self):
+        ret = 0
+        ret |= self.force_skip << 0
+        ret |= self.remove << 1
+        ret |= self.move << 2
+        ret |= self.play_next << 3
+        ret |= self.play << 4
+        ret |= self.pause_resume << 5
+        ret |= self.playlists << 6
+        ret |= self.shuffle << 7
+        ret |= self.leave << 8
+
+        return ret
+
+    def __str__(self):
+        emojis = ('1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '⏹️', '❌')
+
+        msg  = f'```\n'
+        msg += f'1️⃣ Force Skip: {self.force_skip}\n'
+        msg += f'2️⃣ Remove: {self.remove}\n'
+        msg += f'3️⃣ Move: {self.move}\n'
+        msg += f'4️⃣ Playnext: {self.play_next}\n'
+        msg += f'5️⃣ Play: {self.play}\n'
+        msg += f'6️⃣ Pause/Resume: {self.pause_resume}\n'
+        msg += f'7️⃣ Playlists: {self.playlists}\n'
+        msg += f'8️⃣ Shuffle: {self.shuffle}\n'
+        msg += f'9️⃣ Leave: {self.leave}\n'
+        msg += f'```'
+
+        return msg
+
 class YTDLSource(discord.PCMVolumeTransformer):
     YTDL_OPTIONS = {
         'format': 'bestaudio/best',
@@ -709,3 +769,132 @@ class Music(commands.Cog):
                 playlist[video.get('title')] = 'https://www.youtube.com/watch?v=' + video.get('id')
         
         return playlist, playlistTitle
+
+    @commands.command(pass_context=True)
+    @commands.has_permissions(manage_guild=True)
+    async def add_role(self, ctx, role : utils.AdvRoleConverter):
+
+        if role is None:
+            await ctx.send("Role not found")
+            return
+
+        self.bot.cursor.execute("SELECT RoleID FROM perms")
+
+        if (role.id,) not in self.bot.cursor.fetchall():
+            perms = PermissionsParser()
+            not_finished = True
+            cancel = False
+            emojis = ('1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '⏹️', '❌')
+
+            def check(reaction, user):
+                if user is None or user.id != ctx.author.id:
+                    return False
+
+                for emoji in emojis:
+                    if reaction.emoji == emoji:
+                        return True
+
+                return False
+            
+            m = await ctx.send(perms)
+            for emoji in emojis:
+                try:
+                    await m.add_reaction(emoji)
+                except:
+                    pass
+            
+            while not_finished:
+                try:
+                    react, user = await self.bot.wait_for('reaction_add', timeout=30.0, check=check)
+                    if react.message.id == m.id:
+                        if react is None:
+                            not_finished = False
+                            try:
+                                await m.clear_reactions()
+                            except:
+                                pass
+                        
+                        else:
+                            try:
+                                await m.remove_reaction(react.emoji, user)
+                            except:
+                                pass
+
+                            if react.emoji == '1️⃣':
+                                perms.force_skip = not perms.force_skip
+                            elif react.emoji == '2️⃣':
+                                perms.remove = not perms.remove
+                            elif react.emoji == '3️⃣':
+                                perms.move = not perms.move
+                            elif react.emoji == '4️⃣':
+                                perms.play_next = not perms.play_next
+                            elif react.emoji == '5️⃣':
+                                perms.play = not perms.play
+                            elif react.emoji == '6️⃣':
+                                perms.pause_resume = not perms.pause_resume
+                            elif react.emoji == '7️⃣':
+                                perms.playlists = not perms.playlists
+                            elif react.emoji == '8️⃣':
+                                perms.shuffle = not perms.shuffle
+                            elif react.emoji == '9️⃣':
+                                perms.leave = not perms.leave
+                            elif react.emoji == '⏹️':
+                                not_finished = False
+                                await m.clear_reactions()
+                                continue
+                            elif react.emoji == '❌':
+                                not_finished = False
+                                await m.clear_reactions()
+                                cancel = True
+                                continue
+
+                            await m.edit(content=perms)
+
+                except asyncio.TimeoutError:
+                    await ctx.send("Timed out")
+                    await m.clear_reactions()
+                    not_finished = False
+                    cancel = True
+                    continue
+            
+            if cancel:
+                await ctx.send("Cancelled role add")
+            else:
+                self.bot.cursor.execute("INSERT INTO perms VALUES (?, ?)", (role.id, perms.to_int()))
+                self.bot.db.commit()
+                await ctx.send("Role added")
+
+        else:
+            await ctx.send("Role already added")
+
+    @commands.command(pass_context=True)
+    @commands.has_permissions(manage_guilde=True)
+    async def delete_role(self, ctx, role : utils.AdvRoleConverter):
+
+        if role is None:
+            await ctx.send("Role not found")
+            return
+
+        self.bot.cursor.execute("SELECT RoleID FROM perms")
+
+        if (role.id,) not in self.bot.cursor.fetchall():
+            await ctx.send("Role not added yet")
+            return
+
+        else:
+            self.bot.cursor.execute("DELETE FROM perms WHERE RoleID=?", (role.id,))
+            self.bot.db.commit()
+            await ctx.send("Role deleted")
+        
+    @commands.command(pass_context=True)
+    async def check_perms(self, ctx):
+
+        for role in ctx.author.roles[::-1]:
+            self.bot.cursor.execute("SELECT * FROM perms WHERE RoleID=?", (role.id,))
+            ret = self.bot.cursor.fetchone()
+
+            if ret:
+                await ctx.send(PermissionsParser.parse(ret[1]))
+                return
+        
+        await ctx.send(PermissionsParser())
