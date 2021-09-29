@@ -770,7 +770,7 @@ class Music(commands.Cog):
         
         return playlist, playlistTitle
 
-    @commands.command(pass_context=True)
+    @commands.command(pass_context=True, name="add_role", aliases=["ar", "addrole"])
     @commands.has_permissions(manage_guild=True)
     async def add_role(self, ctx, role : utils.AdvRoleConverter):
 
@@ -867,8 +867,8 @@ class Music(commands.Cog):
         else:
             await ctx.send("Role already added")
 
-    @commands.command(pass_context=True)
-    @commands.has_permissions(manage_guilde=True)
+    @commands.command(pass_context=True, name="delete_role", aliases=["dr", "deleterole"])
+    @commands.has_permissions(manage_guild=True)
     async def delete_role(self, ctx, role : utils.AdvRoleConverter):
 
         if role is None:
@@ -886,15 +886,43 @@ class Music(commands.Cog):
             self.bot.db.commit()
             await ctx.send("Role deleted")
         
-    @commands.command(pass_context=True)
-    async def check_perms(self, ctx):
+    @commands.command(pass_context=True, name="check_role", aliases=["cr", "checkrole"])
+    @commands.has_permissions(manage_guild=True)
+    async def check_role(self, ctx, role : utils.AdvRoleConverter = None):
 
-        for role in ctx.author.roles[::-1]:
+        if role is None:
+            for user_role in ctx.author.roles[::-1]:
+                self.bot.cursor.execute("SELECT * FROM perms WHERE RoleID=?", (user_role.id,))
+                ret = self.bot.cursor.fetchone()
+
+                if ret:
+                    await ctx.send(PermissionsParser.parse(ret[1]))
+                    return
+            
+            await ctx.send(f"USING DEFAULT PERMISSIONS\n" + str(PermissionsParser()))
+
+        else:
             self.bot.cursor.execute("SELECT * FROM perms WHERE RoleID=?", (role.id,))
             ret = self.bot.cursor.fetchone()
 
             if ret:
                 await ctx.send(PermissionsParser.parse(ret[1]))
                 return
+            
+            await ctx.send(f"USING DEFAULT PERMISSIONS\n" + str(PermissionsParser()))
+
+    @commands.command(pass_context=True, name="list_roles", aliases=["lr", "listroles", "listrole"])
+    @commands.has_permissions(manage_guild=True)
+    async def list_roles(self, ctx):
+
+        self.bot.cursor.execute("SELECT * FROM perms")
+        ret = self.bot.cursor.fetchall()
+
+        msg  = f"```\n"
+        for (rid, _) in ret:
+            role = discord.utils.get(ctx.guild.roles, id=rid)
+            msg += f"{role.name}\n"
         
-        await ctx.send(PermissionsParser())
+        msg += f"```"
+
+        await ctx.send(msg)
