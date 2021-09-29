@@ -13,6 +13,7 @@ from datetime import date, datetime
 
 def setup(bot):
     bot.add_cog(Music(bot))
+    bot.add_cog(Permissions(bot))
 
 class VoiceError(Exception):
     pass
@@ -87,19 +88,16 @@ class PermissionsParser:
         return ret
 
     def __str__(self):
-        emojis = ('1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '⏹️', '❌')
 
-        msg  = f'```\n'
-        msg += f'1️⃣ Force Skip: {self.force_skip}\n'
-        msg += f'2️⃣ Remove: {self.remove}\n'
-        msg += f'3️⃣ Move: {self.move}\n'
-        msg += f'4️⃣ Playnext: {self.play_next}\n'
-        msg += f'5️⃣ Play: {self.play}\n'
-        msg += f'6️⃣ Pause/Resume: {self.pause_resume}\n'
-        msg += f'7️⃣ Playlists: {self.playlists}\n'
-        msg += f'8️⃣ Shuffle: {self.shuffle}\n'
-        msg += f'9️⃣ Leave: {self.leave}\n'
-        msg += f'```'
+        msg  = '`1. Force Skip: ' + f'{self.force_skip}'.rjust(25 - len('1. Force Skip: ')) + '`\n'
+        msg += '`2. Remove: ' + f'{self.remove}'.rjust(25 - len('2. Remove: ')) + '`\n'
+        msg += '`3. Move: ' + f'{self.move}'.rjust(25 - len('3. Move: ')) + '`\n'
+        msg += '`4. Playnext: ' + f'{self.play_next}'.rjust(25 - len('4. Playnext: ')) + '`\n'
+        msg += '`5️. Play: ' + f'{self.play}'.rjust(26 - len('5️. Play: ')) + '`\n'
+        msg += '`6️. Pause/Resume: ' + f'{self.pause_resume}'.rjust(26 - len('6️. Pause/Resume: ')) + '`\n'
+        msg += '`7️. Playlists: ' + f'{self.playlists}'.rjust(26 - len('7️. Playlists: ')) + '`\n'
+        msg += '`8️. Shuffle: ' + f'{self.shuffle}'.rjust(26 - len('8️. Shuffle: ')) + '`\n'
+        msg += '`9️. Leave: ' + f'{self.leave}'.rjust(26 - len('9️. Leave: ')) + '`\n'
 
         return msg
 
@@ -344,6 +342,7 @@ class MusicManager:
         self.voice_client = None
         self.exists = True
         self.player = self.bot.loop.create_task(self.music_player_task())
+        self.skip_votes = set()
 
     def __del__(self):
         self.player.cancel()
@@ -382,8 +381,11 @@ class MusicManager:
         td = datetime.utcnow() - self.current_song.source.last_time_updated
         self.current_song.source.time_played += td.total_seconds()
         self.next.set()
+        self.skip_votes.clear()
 
     def skip(self):
+        self.skip_votes.clear()
+
         if self.is_playing:
             self.voice_client.stop()
 
@@ -416,7 +418,16 @@ class Music(commands.Cog):
 
     async def cog_before_invoke(self, ctx):
         ctx.voice_state = self.get_voice_state(ctx)
-    
+
+        for user_role in ctx.author.roles[::-1]:
+            self.bot.cursor.execute("SELECT * FROM perms WHERE RoleID=?", (user_role.id,))
+            ret = self.bot.cursor.fetchone()
+
+            if ret:
+                ctx.user_permissions = PermissionsParser.parse(ret[1])
+                return
+        
+        ctx.user_permissions = PermissionsParser()
 
     @commands.command(pass_context=True, name="join", aliases=["summon, start"])
     async def join(self, ctx):
@@ -451,8 +462,11 @@ class Music(commands.Cog):
             await ctx.send('Not connected to a voice channel')
             return
 
-        await ctx.voice_state.stop()
-        del self.players[ctx.guild.id]
+        if ctx.user_permissions.leave or len(ctx.voice_state.voice_client.channel.members) == 2:
+            await ctx.voice_state.stop()
+            del self.players[ctx.guild.id]
+        else:
+            await ctx.send('ERROR: Missing permission `leave`')
 
     @commands.command(pass_context=True, name="now", aliases=["np", "current", "n"])
     async def now(self, ctx):
@@ -476,14 +490,17 @@ class Music(commands.Cog):
         '''
 
         if ctx.voice_state.is_playing:
-            if ctx.voice_state.voice_client.is_playing():
-                td = datetime.utcnow() - ctx.voice_state.current_song.source.last_time_updated
-                ctx.voice_state.current_song.source.last_time_updated = datetime.utcnow()
-                ctx.voice_state.current_song.source.time_played += td.total_seconds()
-                ctx.voice_state.voice_client.pause()
-                await ctx.send("Player paused")
+            if ctx.user_permissions.pause_resume:
+                if ctx.voice_state.voice_client.is_playing():
+                    td = datetime.utcnow() - ctx.voice_state.current_song.source.last_time_updated
+                    ctx.voice_state.current_song.source.last_time_updated = datetime.utcnow()
+                    ctx.voice_state.current_song.source.time_played += td.total_seconds()
+                    ctx.voice_state.voice_client.pause()
+                    await ctx.send("Player paused")
+                else:
+                    await ctx.send("Player already paused")
             else:
-                await ctx.send("Player already paused")
+                await ctx.send(f"ERROR: Missing permission `pause_resume`")
         else:
             await ctx.send("Nothing is playing right now")
     
@@ -494,12 +511,15 @@ class Music(commands.Cog):
         '''
 
         if ctx.voice_state.is_playing:
-            if ctx.voice_state.voice_client.is_paused():
-                ctx.voice_state.voice_client.resume()
-                ctx.voice_state.current_song.source.last_time_updated = datetime.utcnow()
-                await ctx.send("Player resumed")
+            if ctx.user_permissions.pause_resume:
+                if ctx.voice_state.voice_client.is_paused():
+                    ctx.voice_state.voice_client.resume()
+                    ctx.voice_state.current_song.source.last_time_updated = datetime.utcnow()
+                    await ctx.send("Player resumed")
+                else:
+                    await ctx.send("Player is not paused")
             else:
-                await ctx.send("Player is not paused")
+                await ctx.send(f"ERROR: Missing permission `pause_resume`")
         else:
             await ctx.send("Nothing is playing right now")
 
@@ -513,8 +533,35 @@ class Music(commands.Cog):
             await ctx.send("Not playing anything right now")
             return
 
-        await ctx.send(f"Skipped **{ctx.voice_state.current_song.source.title}**...")
-        ctx.voice_state.skip()
+        voter = ctx.message.author
+        if voter == ctx.voice_state.current_song.requester:
+            ctx.voice_state.skip()
+        
+        if voter.id not in ctx.voice_state.skip_votes:
+            ctx.voice_state.skip_votes.add(voter.id)
+            total_votes = len(ctx.voice_state.skip_votes)
+
+            if total_votes >= 3:
+                await ctx.send(f"Skipped **{ctx.voice_state.current_song.source.title}**...")
+                ctx.voice_state.skip()
+            else:
+                await ctx.send(f'Skip vote added, currently at **{total_votes}/3**')
+        
+        else:
+            await ctx.send("You have already voted to skip this song")
+
+    @commands.command(pass_context=True, name="force_skip", aliases=["forceskip", "fs"])
+    async def force_skip(self, ctx):
+
+        if not ctx.voice_state.is_playing:
+            await ctx.send("Not playing anything right now")
+            return
+
+        if ctx.user_permissions.force_skip:
+            await ctx.send(f"Skipped **{ctx.voice_state.current_song.source.title}**...")
+            ctx.voice_state.skip()
+        else:
+            await ctx.send("ERROR: Missing permission `force_skip`")
 
     @commands.command(pass_context=True, name="queue", aliases=["q", "list", "songs", "playlist"])
     async def queue(self, ctx, page: int = 1):
@@ -551,10 +598,14 @@ class Music(commands.Cog):
         Shuffle the queue randomly
         '''
 
-        if len(ctx.voice_state.queue) == 0:
-            return await ctx.send("Queue is empty")
-
-        ctx.voice_state.queue.shuffle()
+        if ctx.user_permissions.shuffle:
+            if len(ctx.voice_state.queue) == 0:
+                return await ctx.send("Queue is empty")
+            
+            ctx.voice_state.queue.shuffle()
+            await ctx.send("Queue shuffled")
+        else:
+            await ctx.send("ERROR: Missing permission `shuffle`")
 
     @commands.command(pass_context=True, name="remove", aliases=["r", "d", "delete", "del", "rm", "rem"])
     async def remove(self, ctx, index: int):
@@ -567,9 +618,12 @@ class Music(commands.Cog):
 
         if index > 0 and index <= len(ctx.voice_state.queue):
             song_to_del = ctx.voice_state.queue[index - 1]
-            # await ctx.send(f"Removed **{song_to_del.source.title}**")
-            await ctx.send(song_to_del.create_embed(title="Removed", show_progress=True))
-            ctx.voice_state.queue.remove(index - 1)
+
+            if song_to_del.requester == ctx.author or ctx.user_permissions.remove:
+                await ctx.send(embed=song_to_del.create_embed(title="Removed", show_progress=True))
+                ctx.voice_state.queue.remove(index - 1)
+            else:
+                await ctx.send("ERROR: Missing permission `remove`")
         else:
             await ctx.send("Index out of range")
 
@@ -579,11 +633,14 @@ class Music(commands.Cog):
         Empty the queue
         '''
 
-        if len(ctx.voice_state.queue) == 0:
-            return await ctx.send("Queue is empty")
+        if ctx.user_permissions.force_skip:
+            if len(ctx.voice_state.queue) == 0:
+                return await ctx.send("Queue is empty")
 
-        ctx.voice_state.queue.clear()
-        await ctx.send("Queue cleared")
+            ctx.voice_state.queue.clear()
+            await ctx.send("Queue cleared")
+        else:
+            await ctx.send("ERROR: Missing permission `force_skip`")
     
     @commands.command(pass_context=True, name="move", aliases=["m",])
     async def move(self, ctx, from_index: int, to_index: int):
@@ -593,16 +650,19 @@ class Music(commands.Cog):
         Note: This does not swap, it removes the song and inserts it at the new position
         '''
 
-        if len(ctx.voice_state.queue) < 2:
-            return await ctx.send("Queue is too short for moving")
+        if ctx.user_permissions.move:
+            if len(ctx.voice_state.queue) < 2:
+                return await ctx.send("Queue is too short for moving")
 
-        if 0 < from_index <= len(ctx.voice_state.queue) and 0 < to_index <= len(ctx.voice_state.queue):
-            temp = ctx.voice_state.queue._queue[from_index - 1]
-            del ctx.voice_state.queue._queue[from_index - 1]
-            ctx.voice_state.queue._queue.insert(to_index - 1, temp)
-            await ctx.send(f"Moved **{temp.source.title}** to position `{to_index}`")
+            if 0 < from_index <= len(ctx.voice_state.queue) and 0 < to_index <= len(ctx.voice_state.queue):
+                temp = ctx.voice_state.queue._queue[from_index - 1]
+                del ctx.voice_state.queue._queue[from_index - 1]
+                ctx.voice_state.queue._queue.insert(to_index - 1, temp)
+                await ctx.send(f"Moved **{temp.source.title}** to position `{to_index}`")
+            else:
+                await ctx.send(f"Invalid indices")
         else:
-            await ctx.send(f"Invalid indices")
+            await ctx.send("ERROR: Missing permission `move`")
 
     @commands.command(pass_context=True, name="play", aliases=["p", "pl"])
     async def play(self, ctx, *, search: str):
@@ -626,46 +686,51 @@ class Music(commands.Cog):
         if not ctx.voice_state.voice_client:
             await ctx.invoke(self.join)
 
-        if '?list=' in search:
-            m = await ctx.send(":clock2: One moment! Processing playlists can take a bit... :clock2:")
-            async with ctx.typing():
-                playlist, playlistTitle = self._playlist(search)
-                songlist = []
-                for _title, _link in playlist.items():
+        if ctx.user_permissions.play:
+            if '?list=' in search:
+                if ctx.user_permissions.playlists:
+                    m = await ctx.send(":clock2: One moment! Processing playlists can take a bit... :clock2:")
+                    async with ctx.typing():
+                        playlist, playlistTitle = self._playlist(search)
+                        songlist = []
+                        for _title, _link in playlist.items():
+                            try:
+                                source = await YTDLSource.create_source(ctx, _link, loop=self.bot.loop)
+                            except YTDLError as e:
+                                await ctx.send(f'An error occurred while processing this request: **{e}**')
+                            else:
+                                if source.duration_raw >= 15600: #4 hours and 20 minutes
+                                    await ctx.send(f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes")
+                                    return
+                                song = Song(source)
+                        
+                                songlist.append(song)
+
+                    await m.delete()
+                    if ctx.voice_state.current_song:
+                        await ctx.send(f"Queued **{playlistTitle}**")
+                    for song in songlist:
+                        await ctx.voice_state.queue.put(song)
+                else:
+                    await ctx.send("ERROR: Missing permission `playlists`")
+            else:
+                async with ctx.typing():
                     try:
-                        source = await YTDLSource.create_source(ctx, _link, loop=self.bot.loop)
+                        source = await YTDLSource.create_source(ctx, search.strip("<>"), loop=self.bot.loop)
                     except YTDLError as e:
                         await ctx.send(f'An error occurred while processing this request: **{e}**')
                     else:
                         if source.duration_raw >= 15600: #4 hours and 20 minutes
                             await ctx.send(f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes")
+                            await ctx.message.delete()
                             return
                         song = Song(source)
-                
-                        songlist.append(song)
-
-            await m.delete()
-            if ctx.voice_state.current_song:
-                await ctx.send(f"Queued **{playlistTitle}**")
-            for song in songlist:
-                await ctx.voice_state.queue.put(song)
-
+                        
+                        if ctx.voice_state.current_song:
+                            await ctx.send(embed=song.create_embed(title='Queued'))
+                        await ctx.voice_state.queue.put(song)
         else:
-            async with ctx.typing():
-                try:
-                    source = await YTDLSource.create_source(ctx, search.strip("<>"), loop=self.bot.loop)
-                except YTDLError as e:
-                    await ctx.send(f'An error occurred while processing this request: **{e}**')
-                else:
-                    if source.duration_raw >= 15600: #4 hours and 20 minutes
-                        await ctx.send(f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes")
-                        await ctx.message.delete()
-                        return
-                    song = Song(source)
-                    
-                    if ctx.voice_state.current_song:
-                        await ctx.send(embed=song.create_embed(title='Queued'))
-                    await ctx.voice_state.queue.put(song)
+            await ctx.send("ERROR: Missing permission `play`")
 
         await ctx.message.delete()
 
@@ -694,23 +759,29 @@ class Music(commands.Cog):
         if "?list=" in search:
             await ctx.send("Sorry! You can't skip the queue with playlists")
 
-        async with ctx.typing():
-            try:
-                source = await YTDLSource.create_source(ctx, search.strip("<>"), loop=self.bot.loop)
-            except YTDLError as e:
-                await ctx.send(f'An error occurred while processing this request: **{e}**')
+        if len(ctx.voice_state.queue) == 0 or ctx.user_permissions.play_next:
+            if ctx.user_permissions.play:
+                async with ctx.typing():
+                    try:
+                        source = await YTDLSource.create_source(ctx, search.strip("<>"), loop=self.bot.loop)
+                    except YTDLError as e:
+                        await ctx.send(f'An error occurred while processing this request: **{e}**')
+                    else:
+                        if source.duration_raw >= 15600: #4 hours and 20 minutes
+                            await ctx.send(f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes")
+                            await ctx.message.delete()
+                            return
+                        song = Song(source)
+                        
+                        if ctx.voice_state.current_song:
+                            ctx.voice_state.queue._queue.appendleft(song)
+                            await ctx.send(embed=song.create_embed(title='Queued'))
+                        else:
+                            await ctx.voice_state.queue.put(song)
             else:
-                if source.duration_raw >= 15600: #4 hours and 20 minutes
-                    await ctx.send(f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes")
-                    await ctx.message.delete()
-                    return
-                song = Song(source)
-                
-                if ctx.voice_state.current_song:
-                    ctx.voice_state.queue._queue.appendleft(song)
-                    await ctx.send(embed=song.create_embed(title='Queued'))
-                else:
-                    await ctx.voice_state.queue.put(song)
+                await ctx.send("ERROR: Missing permission `play`")
+        else:
+            await ctx.send("ERROR: Missing permission `play_next`")
 
         await ctx.message.delete()
 
@@ -732,26 +803,29 @@ class Music(commands.Cog):
         if not ctx.voice_state.voice_client:
             await ctx.invoke(self.join)
 
-        async with ctx.typing():
-            try:
-                source = await YTDLSource.search_source(ctx, search.strip("<>"), loop=self.bot.loop, bot=self.bot)
-            except YTDLError as e:
-                await ctx.send(f'An error occurred while processing this request: {e}')
-            else:
-                if source == 'sel_invalid':
-                    await ctx.send('Invalid Selection', delete_after=15.0)
-                elif source == 'cancel':
-                    await ctx.send('Selection canceled', delete_after=15.0)
-                elif source == 'timeout':
-                    await ctx.send('Selection timed out', delete_after=15.0)
+        if ctx.user_permissions.play:
+            async with ctx.typing():
+                try:
+                    source = await YTDLSource.search_source(ctx, search.strip("<>"), loop=self.bot.loop, bot=self.bot)
+                except YTDLError as e:
+                    await ctx.send(f'An error occurred while processing this request: {e}')
                 else:
-                    if source.duration_raw >= 15600: #4 hours and 20 minutes
-                        await ctx.send(f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes")
-                        return
-                    song = Song(source)
-                    await ctx.voice_state.queue.put(song)
-                    if ctx.voice_state.current_song:
-                        await ctx.send(embed=song.create_embed(title='Queued'))
+                    if source == 'sel_invalid':
+                        await ctx.send('Invalid Selection', delete_after=15.0)
+                    elif source == 'cancel':
+                        await ctx.send('Selection canceled', delete_after=15.0)
+                    elif source == 'timeout':
+                        await ctx.send('Selection timed out', delete_after=15.0)
+                    else:
+                        if source.duration_raw >= 15600: #4 hours and 20 minutes
+                            await ctx.send(f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes")
+                            return
+                        song = Song(source)
+                        await ctx.voice_state.queue.put(song)
+                        if ctx.voice_state.current_song:
+                            await ctx.send(embed=song.create_embed(title='Queued'))
+        else:
+            await ctx.send("ERROR: Missing permission `play`")
 
     def _playlist(self, search: str):
 
@@ -770,9 +844,17 @@ class Music(commands.Cog):
         
         return playlist, playlistTitle
 
-    @commands.command(pass_context=True, name="add_role", aliases=["ar", "addrole"])
+class Permissions(commands.Cog):
+
+    def __init__(self, bot):
+        self.bot = bot
+
+    @commands.command(pass_context=True, name="add_role", aliases=["ar", "addrole"], hidden=True)
     @commands.has_permissions(manage_guild=True)
     async def add_role(self, ctx, role : utils.AdvRoleConverter):
+        '''
+        Set role permissions for a role and add it to the database
+        '''
 
         if role is None:
             await ctx.send("Role not found")
@@ -784,7 +866,7 @@ class Music(commands.Cog):
             perms = PermissionsParser()
             not_finished = True
             cancel = False
-            emojis = ('1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '⏹️', '❌')
+            emojis = ('1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '✅', '❌')
 
             def check(reaction, user):
                 if user is None or user.id != ctx.author.id:
@@ -796,7 +878,7 @@ class Music(commands.Cog):
 
                 return False
             
-            m = await ctx.send(perms)
+            m = await ctx.send('`' + f'Role: {role.name}'.center(25) + '`\n' + str(perms))
             for emoji in emojis:
                 try:
                     await m.add_reaction(emoji)
@@ -838,7 +920,7 @@ class Music(commands.Cog):
                                 perms.shuffle = not perms.shuffle
                             elif react.emoji == '9️⃣':
                                 perms.leave = not perms.leave
-                            elif react.emoji == '⏹️':
+                            elif react.emoji == '✅':
                                 not_finished = False
                                 await m.clear_reactions()
                                 continue
@@ -848,7 +930,7 @@ class Music(commands.Cog):
                                 cancel = True
                                 continue
 
-                            await m.edit(content=perms)
+                            await m.edit(content='`' + f'Role: {role.name}'.center(25) + '`\n' + str(perms))
 
                 except asyncio.TimeoutError:
                     await ctx.send("Timed out")
@@ -867,9 +949,12 @@ class Music(commands.Cog):
         else:
             await ctx.send("Role already added")
 
-    @commands.command(pass_context=True, name="delete_role", aliases=["dr", "deleterole"])
+    @commands.command(pass_context=True, name="delete_role", aliases=["dr", "deleterole"], hidden=True)
     @commands.has_permissions(manage_guild=True)
     async def delete_role(self, ctx, role : utils.AdvRoleConverter):
+        '''
+        Remove custom role permissions and revert role to default permissions
+        '''
 
         if role is None:
             await ctx.send("Role not found")
@@ -886,9 +971,12 @@ class Music(commands.Cog):
             self.bot.db.commit()
             await ctx.send("Role deleted")
         
-    @commands.command(pass_context=True, name="check_role", aliases=["cr", "checkrole"])
+    @commands.command(pass_context=True, name="check_role", aliases=["cr", "checkrole"], hidden=True)
     @commands.has_permissions(manage_guild=True)
     async def check_role(self, ctx, role : utils.AdvRoleConverter = None):
+        '''
+        Check either your own current role permissions or the permissions of a target role
+        '''
 
         if role is None:
             for user_role in ctx.author.roles[::-1]:
@@ -896,24 +984,27 @@ class Music(commands.Cog):
                 ret = self.bot.cursor.fetchone()
 
                 if ret:
-                    await ctx.send(PermissionsParser.parse(ret[1]))
+                    await ctx.send('`' + f'Role: {user_role.name}'.center(25) + '`\n' + str(PermissionsParser.parse(ret[1])))
                     return
             
-            await ctx.send(f"USING DEFAULT PERMISSIONS\n" + str(PermissionsParser()))
+            await ctx.send('`' + 'Role: @everyone'.center(25) + '`\n' + str(PermissionsParser()))
 
         else:
             self.bot.cursor.execute("SELECT * FROM perms WHERE RoleID=?", (role.id,))
             ret = self.bot.cursor.fetchone()
 
             if ret:
-                await ctx.send(PermissionsParser.parse(ret[1]))
+                await ctx.send('`' + f'Role: {role.name}'.center(25) + '`\n' + str(PermissionsParser.parse(ret[1])))
                 return
             
-            await ctx.send(f"USING DEFAULT PERMISSIONS\n" + str(PermissionsParser()))
+            await ctx.send('`' + f'Role: {role.name}'.center(25) + '`\n' + str(PermissionsParser()))
 
-    @commands.command(pass_context=True, name="list_roles", aliases=["lr", "listroles", "listrole"])
+    @commands.command(pass_context=True, name="list_roles", aliases=["lr", "listroles", "listrole", "list_role"], hidden=True)
     @commands.has_permissions(manage_guild=True)
     async def list_roles(self, ctx):
+        '''
+        List all roles that have non-default permissions
+        '''
 
         self.bot.cursor.execute("SELECT * FROM perms")
         ret = self.bot.cursor.fetchall()

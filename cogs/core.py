@@ -27,7 +27,7 @@ class Core(commands.Cog):
             #No checks here as this point is only reached if the command should be processed
             await self.bot.process_commands(message)
 
-    @commands.command(pass_context=True)
+    @commands.command(pass_context=True, hidden=True)
     @utils.is_Owner()
     async def py(self, ctx):
         """Execute arbitrary python code
