@@ -68,10 +68,8 @@ class Help(commands.Cog):
 			for name in self.cogs:
 				for cmd in self.cogs[name].get_commands():
 					printed_cmds.append(cmd.qualified_name)
-					add_cmd = not cmd.hidden or ctx.author.id == 192739355264024586
 
-					if add_cmd:
-						out = out + f"**${cmd.qualified_name}** {'' if cmd.short_doc is None else cmd.short_doc}\n"
+					out = out + f"**${cmd.qualified_name}** {'' if cmd.short_doc is None else cmd.short_doc}\n"
 
 				if out != "":
 					emb.add_field(name=f"{self.cogs[name].qualified_name}", value=out, inline=False)
@@ -80,9 +78,8 @@ class Help(commands.Cog):
 			first_pass = True
 
 			for cmd in self.top_level_commands:
-				add_cmd = not cmd.hidden or ctx.author.id == 192739355264024586
 
-				if cmd.qualified_name not in printed_cmds and add_cmd:
+				if cmd.qualified_name not in printed_cmds:
 					if first_pass:
 						first_pass = False
 
@@ -116,19 +113,16 @@ class Help(commands.Cog):
 					if cmd:
 						break
 
-			add_cmd = not cmd.hidden or ctx.author.id == 192739355264024586
+			emb = discord.Embed(
+				title=f"{cmd.qualified_name}",
+				colour=discord.Color.blurple()
+				)
 
-			if add_cmd:
-				emb = discord.Embed(
-					title=f"{cmd.qualified_name}",
-					colour=discord.Color.blurple()
-					)
-
-				emb.add_field(name="Usage", value=f"**${cmd.qualified_name}** {cmd.signature}", inline=False)
-				if type(cmd) is commands.core.Group:
-					s = "\n"
-					emb.add_field(name="Subcommands", value=f"{s.join([c.name for c in cmd.commands])}", inline=False)
-				emb.add_field(name="Description", value=f"{cmd.help}", inline=False)
-				if type(ctx.channel) is not discord.DMChannel:
-					await ctx.send("Sending help!", delete_after=10)
-				await ctx.author.send(embed=emb)
+			emb.add_field(name="Usage", value=f"**${cmd.qualified_name}** {cmd.signature}", inline=False)
+			if type(cmd) is commands.core.Group:
+				s = "\n"
+				emb.add_field(name="Subcommands", value=f"{s.join([c.name for c in cmd.commands])}", inline=False)
+			emb.add_field(name="Description", value=f"{cmd.help}", inline=False)
+			if type(ctx.channel) is not discord.DMChannel:
+				await ctx.send("Sending help!", delete_after=10)
+			await ctx.author.send(embed=emb)
