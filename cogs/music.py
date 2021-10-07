@@ -21,6 +21,9 @@ class VoiceError(Exception):
 class YTDLError(Exception):
     pass
 
+class SongError(Exception):
+    pass
+
 def emb_color(query):
 
     if query in ['Now playing']:
@@ -29,7 +32,7 @@ def emb_color(query):
     elif query in ['Queued']:
         return discord.Color.from_rgb(188, 191, 61).value
     
-    elif query in ['Removed']:
+    elif query in ['Removed', 'Skipped', 'Error']:
         return discord.Color.dark_red().value
     else:
         return discord.Color.from_rgb(255, 255, 255).value
@@ -121,7 +124,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
         }
 
     FFMPEG_OPTIONS = {
-        'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -nostats -loglevel 0',
+        'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -loglevel fatal -nostats',
         'options': '-vn',
     }
 
@@ -283,7 +286,7 @@ class Song:
         self.source = source
         self.requester = source.requester
 
-    def create_embed(self, title='Now playing', show_progress=False):
+    def create_embed(self, title='Now playing', show_progress=False, show_eta=False, show_eta_ctx=None):
         if show_progress:
             num_segments = 20
 
@@ -307,6 +310,11 @@ class Song:
                     .add_field(name='Uploader', value=f'[{self.source.uploader}]({self.source.uploader_url})')
                     .set_thumbnail(url=self.source.thumbnail))
 
+        if show_eta:
+            if not show_eta_ctx:
+                raise SongError("*show_eta* set to True but no context was provided")
+            embed.set_footer(text=f"ETA: {YTDLSource.parse_duration(sum(x.source.duration_raw for x in show_eta_ctx.voice_state.queue) + show_eta_ctx.voice_state.current_song.source.duration_raw)}")
+        
         return embed
 
 class SongQueue(asyncio.Queue):
@@ -535,14 +543,16 @@ class Music(commands.Cog):
 
         voter = ctx.message.author
         if voter == ctx.voice_state.current_song.requester:
+            await ctx.send(embed=ctx.voice_state.current_song.create_embed(title="Skipped", show_progress=False))
             ctx.voice_state.skip()
+            return
         
         if voter.id not in ctx.voice_state.skip_votes:
             ctx.voice_state.skip_votes.add(voter.id)
             total_votes = len(ctx.voice_state.skip_votes)
 
             if total_votes >= 3:
-                await ctx.send(f"Skipped **{ctx.voice_state.current_song.source.title}**...")
+                await ctx.send(embed=ctx.voice_state.current_song.create_embed(title="Skipped", show_progress=False))
                 ctx.voice_state.skip()
             else:
                 await ctx.send(f'Skip vote added, currently at **{total_votes}/3**')
@@ -558,7 +568,7 @@ class Music(commands.Cog):
             return
 
         if ctx.user_permissions.force_skip:
-            await ctx.send(f"Skipped **{ctx.voice_state.current_song.source.title}**...")
+            await ctx.send(embed=ctx.voice_state.current_song.create_embed(title="Skipped", show_progress=False))
             ctx.voice_state.skip()
         else:
             await ctx.send("ERROR: Missing permission `force_skip`")
@@ -589,7 +599,7 @@ class Music(commands.Cog):
             queue += f'`{i + 1}.` [{song.source.title}]({song.source.url}) | `{song.source.duration} Requested by: {song.source.requester.name}#{song.source.requester.discriminator}`\n'
 
         embed = (discord.Embed(description=queue)
-                    .set_footer(text=f'Viewing page {page}/{pages}'))
+                    .set_footer(text=f'Viewing page {page}/{pages}  |  Queue Length: {YTDLSource.parse_duration(sum(x.source.duration_raw for x in ctx.voice_state.queue))}'))
         await ctx.send(embed=embed)
 
     @commands.command(pass_context=True, name="shuffle")
@@ -658,7 +668,7 @@ class Music(commands.Cog):
                 temp = ctx.voice_state.queue._queue[from_index - 1]
                 del ctx.voice_state.queue._queue[from_index - 1]
                 ctx.voice_state.queue._queue.insert(to_index - 1, temp)
-                await ctx.send(f"Moved **{temp.source.title}** to position `{to_index}`")
+                await ctx.send(f"Moved song from position `{from_index}`` to position `{to_index}`")
             else:
                 await ctx.send(f"Invalid indices")
         else:
@@ -697,10 +707,12 @@ class Music(commands.Cog):
                             try:
                                 source = await YTDLSource.create_source(ctx, _link, loop=self.bot.loop)
                             except YTDLError as e:
-                                await ctx.send(f'An error occurred while processing this request: **{e}**')
+                                emb = discord.Embed(title="An Error Occurred", description=str(e), colour=emb_color('Error'))
+                                await ctx.send(embed=emb)
                             else:
                                 if source.duration_raw >= 15600: #4 hours and 20 minutes
-                                    await ctx.send(f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes")
+                                    emb = discord.Embed(title="An Error Occurred", description=f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes", colour=emb_color('Error'))
+                                    await ctx.send(embed=emb)
                                     return
                                 song = Song(source)
                         
@@ -708,7 +720,12 @@ class Music(commands.Cog):
 
                     await m.delete()
                     if ctx.voice_state.current_song:
-                        await ctx.send(f"Queued **{playlistTitle}**")
+                        emb = (discord.Embed(title="Queued",
+                                            description=f'[{playlistTitle}]({search})',
+                                            color=emb_color("Queued"))
+                                .add_field(name='Requested by', value=ctx.author.mention)
+                                .set_thumbnail(url=songlist[0].source.thumbnail))
+                        await ctx.send(embed=emb)
                     for song in songlist:
                         await ctx.voice_state.queue.put(song)
                 else:
@@ -718,16 +735,18 @@ class Music(commands.Cog):
                     try:
                         source = await YTDLSource.create_source(ctx, search.strip("<>"), loop=self.bot.loop)
                     except YTDLError as e:
-                        await ctx.send(f'An error occurred while processing this request: **{e}**')
+                        emb = discord.Embed(title="An Error Occurred", description=str(e), colour=emb_color('Error'))
+                        await ctx.send(embed=emb)
                     else:
                         if source.duration_raw >= 15600: #4 hours and 20 minutes
-                            await ctx.send(f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes")
+                            emb = discord.Embed(title="An Error Occurred", description=f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes", colour=emb_color('Error'))
+                            await ctx.send(embed=emb)
                             await ctx.message.delete()
                             return
                         song = Song(source)
                         
                         if ctx.voice_state.current_song:
-                            await ctx.send(embed=song.create_embed(title='Queued'))
+                            await ctx.send(embed=song.create_embed(title='Queued', show_eta=True, show_eta_ctx=ctx))
                         await ctx.voice_state.queue.put(song)
         else:
             await ctx.send("ERROR: Missing permission `play`")
@@ -765,17 +784,19 @@ class Music(commands.Cog):
                     try:
                         source = await YTDLSource.create_source(ctx, search.strip("<>"), loop=self.bot.loop)
                     except YTDLError as e:
-                        await ctx.send(f'An error occurred while processing this request: **{e}**')
+                        emb = discord.Embed(title="An Error Occurred", description=str(e), colour=emb_color('Error'))
+                        await ctx.send(embed=emb)
                     else:
                         if source.duration_raw >= 15600: #4 hours and 20 minutes
-                            await ctx.send(f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes")
+                            emb = discord.Embed(title="An Error Occurred", description=f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes", colour=emb_color('Error'))
+                            await ctx.send(embed=emb)
                             await ctx.message.delete()
                             return
                         song = Song(source)
                         
                         if ctx.voice_state.current_song:
                             ctx.voice_state.queue._queue.appendleft(song)
-                            await ctx.send(embed=song.create_embed(title='Queued'))
+                            await ctx.send(embed=song.create_embed(title='Queued', show_eta=True, show_eta_ctx=ctx))
                         else:
                             await ctx.voice_state.queue.put(song)
             else:
@@ -808,7 +829,8 @@ class Music(commands.Cog):
                 try:
                     source = await YTDLSource.search_source(ctx, search.strip("<>"), loop=self.bot.loop, bot=self.bot)
                 except YTDLError as e:
-                    await ctx.send(f'An error occurred while processing this request: {e}')
+                    emb = discord.Embed(title="An Error Occurred", description=str(e), colour=emb_color('Error'))
+                    await ctx.send(embed=emb)
                 else:
                     if source == 'sel_invalid':
                         await ctx.send('Invalid Selection', delete_after=15.0)
@@ -818,12 +840,13 @@ class Music(commands.Cog):
                         await ctx.send('Selection timed out', delete_after=15.0)
                     else:
                         if source.duration_raw >= 15600: #4 hours and 20 minutes
-                            await ctx.send(f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes")
+                            emb = discord.Embed(title="An Error Occurred", description=f"**{source.title}** is too long! Please keep song requests under 4 hours and 20 minutes", colour=emb_color('Error'))
+                            await ctx.send(embed=emb)
                             return
                         song = Song(source)
                         await ctx.voice_state.queue.put(song)
                         if ctx.voice_state.current_song:
-                            await ctx.send(embed=song.create_embed(title='Queued'))
+                            await ctx.send(embed=song.create_embed(title='Queued', show_eta=True, show_eta_ctx=ctx))
         else:
             await ctx.send("ERROR: Missing permission `play`")
 
